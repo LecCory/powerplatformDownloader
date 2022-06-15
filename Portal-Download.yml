@@ -1,0 +1,97 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- main
+
+pool:
+  vmImage: windows-latest
+
+stages:
+- stage: Dev
+  variables:
+  - group: devtest
+  - group: kv-devtest
+
+  jobs:
+    - job: Download
+      displayName: 'Download Portal Content'
+      steps:
+        
+        - task: PowerPlatformToolInstaller@0
+          inputs:
+            DefaultVersion: true
+          displayName: "Install PowerApps tools"
+          
+
+        - task: PowerPlatformExportSolution@0
+          inputs:
+            authenticationType: 'PowerPlatformSPN'
+            PowerPlatformSPN: 'devtest-svc-powerplartformchecker'
+            SolutionName: 'VaccineAttestation'
+            SolutionOutputFile: $(Build.SourcesDirectory)\staging\vaccineAttestation.zip
+            AsyncOperation: true
+            MaxAsyncWaitTime: '60'
+            Managed: false
+          displayName: "Export Solution"
+
+        # - task: PowerShell@2
+        #   inputs:
+        #     targetType: 'inline'
+        #     script: |
+        #       Invoke-WebRequest https://aka.ms/PowerAppsCLI -OutFile pac.msi
+        #       msiexec /i pac.msi /quiet /norestart
+        - task: NuGetCommand@2
+          inputs:
+            command: 'custom'
+            arguments: 'install Microsoft.PowerApps.CLI -Version 1.12.2 -OutputDirectory pac'
+        
+        - task: PowerShell@2
+          inputs:
+            targetType: 'inline'
+            script: |
+              $pacNugetFolder = Get-ChildItem "pac" | Where-Object {$_.Name -match "Microsoft.PowerApps.CLI."}
+              $pacPath = $pacNugetFolder.FullName + "\tools"
+              echo $pacPath
+              echo "##vso[task.setvariable variable=pacPath]$pacPath"
+             
+          displayName: 'Find pac Folder'
+          
+        - task: PowerShell@2
+          inputs:
+            targetType: 'inline'
+            script: |
+
+              $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+              $(pacPath)\pac.exe auth create --name $(PacAuthProfileName-dev) `
+                --url $(PowerPlatformInstanceUrl-dev) `
+                --tenant $(PowerPlatformAadDirectoryId) `
+                --applicationId $(PowerPlatformAadApplicationId) `
+                --clientSecret $(gcr2wp-devtest-key-pipeline-deployment)
+              $(pacPath)\pac.exe org who
+              $(pacPath)\pac.exe paportal download -p $(Build.SourcesDirectory)\backup\ -id f46b70cc-580b-4f1a-87c3-41deb48eb90d | Tee-Object -file $(Build.SourcesDirectory)/import.txt
+          displayName: 'Download Portal Content'
+
+        - task: ArchiveFiles@2
+          inputs:
+            rootFolderOrFile: '$(Build.SourcesDirectory)\backup'
+            includeRootFolder: false
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+            replaceExistingArchive: true
+        - script: |
+            mv  $(Build.SourcesDirectory)\staging\vaccineAttestation.zip $(Build.ArtifactStagingDirectory)
+          displayName: "Move Vaccine into Artifact directory"
+        - publish: '$(Build.ArtifactStagingDirectory)'
+          artifact: dev
+          displayName: Publish dev artifact
+                
+
+
+    
+
+
+
